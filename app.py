@@ -153,7 +153,7 @@ with col5:
 st.write("")
 
 # Main View (Structured Tabs)
-tabs = st.tabs(["📊 Asset Overview", "🤖 AI Recommendations", "📄 Sustainability Report"])
+tabs = st.tabs(["📊 Asset Overview", "🤖 AI Recommendations", "📄 Sustainability Report", "🔮 What-If Simulation"])
 
 # TAB 1: Asset Overview
 with tabs[0]:
@@ -358,3 +358,83 @@ with tabs[2]:
             f'<div class="report-card">{st.session_state.sustainability_report}</div>',
             unsafe_allow_html=True,
         )
+
+
+# TAB 4: What-If Simulation
+SIMULATION_ACTIONS = {
+    "Do Nothing": 0.0,
+    "Switch to Low-Power Mode": 0.30,
+    "Enable Sleep Mode": 0.70,
+    "Schedule Shutdown": 1.00,
+}
+
+with tabs[3]:
+    st.subheader("1-Hour Energy What-If Simulation")
+    st.caption("Deterministic projection based on current power readings. No AI calls — pure physics.")
+
+    st.write("")
+
+    # User Controls
+    sim_col1, sim_col2 = st.columns([2, 3])
+    with sim_col1:
+        sim_asset = st.selectbox(
+            "Select Asset",
+            options=available_assets,
+            key="sim_asset_select",
+        )
+    with sim_col2:
+        sim_action = st.selectbox(
+            "Simulated Action",
+            options=list(SIMULATION_ACTIONS.keys()),
+            key="sim_action_select",
+        )
+
+    st.write("")
+
+    # Simulation Math (deterministic — no LLM)
+    sim_state = twin_states.get(sim_asset)
+    if sim_state:
+        current_power_w = sim_state.current_power_w
+        reduction_factor = SIMULATION_ACTIONS[sim_action]
+
+        current_1hr_kwh = current_power_w / 1000.0
+        optimized_1hr_kwh = current_1hr_kwh * (1.0 - reduction_factor)
+        savings_kwh = current_1hr_kwh - optimized_1hr_kwh
+        savings_co2e = savings_kwh * carbon_factor
+        delta_kwh = optimized_1hr_kwh - current_1hr_kwh  # negative = improvement
+
+        # Side-by-side metric cards
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric("Current 1-hr Projection", f"{current_1hr_kwh:.3f} kWh")
+        with m2:
+            st.metric(
+                "Optimized 1-hr Projection",
+                f"{optimized_1hr_kwh:.3f} kWh",
+                delta=f"{delta_kwh:+.3f} kWh",
+                delta_color="inverse",
+            )
+        with m3:
+            st.metric("Projected Savings", f"{savings_kwh:.3f} kWh")
+        with m4:
+            st.metric("Projected CO2e Saved", f"{savings_co2e:.3f} kg")
+
+        st.write("")
+
+        # Side-by-side bar chart comparison
+        chart_data = pd.DataFrame(
+            {
+                "Scenario": ["Current", sim_action],
+                "1-Hour Energy (kWh)": [round(current_1hr_kwh, 4), round(optimized_1hr_kwh, 4)],
+            }
+        ).set_index("Scenario")
+
+        st.bar_chart(chart_data, height=300, use_container_width=True)
+
+        st.caption(
+            f"Asset: `{sim_asset}` | Action: `{sim_action}` | "
+            f"Reduction Factor: {reduction_factor*100:.0f}% | "
+            f"Carbon Factor: {carbon_factor:.2f} kg CO2e/kWh"
+        )
+    else:
+        st.warning(f"No twin state available for asset: {sim_asset}")
