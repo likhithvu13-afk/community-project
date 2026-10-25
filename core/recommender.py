@@ -182,3 +182,69 @@ Strict Safety Instructions:
             carbon_factor,
             f"AI exception: {exc}.",
         )
+
+
+def generate_sustainability_report(summary_data: Dict[str, Any]) -> str:
+    """Generate a concise executive sustainability report (< 200 words).
+
+    Requirements:
+    - If API key is missing or call fails, use a deterministic structured fallback.
+    - Produces an executive summary under 200 words.
+    - Explicitly states that all savings are projected estimates.
+    - Highlights key findings and exactly 2 actionable next steps.
+
+    Args:
+        summary_data: Dictionary containing energy and emissions aggregates.
+
+    Returns:
+        Markdown string formatted report.
+    """
+    load_dotenv()
+    gemini_key = os.getenv("GEMINI_API_KEY")
+
+    total_cons = float(summary_data.get("total_consumption_kwh", 0.0))
+    total_base = float(summary_data.get("total_baseline_kwh", 0.0))
+    total_excess = float(summary_data.get("total_excess_kwh", 0.0))
+    savings = float(summary_data.get("approved_savings_kwh", 0.0))
+    co2e = float(summary_data.get("approved_co2e_kg", 0.0))
+    top_wasting = summary_data.get("top_wasting_assets", [])
+    wasting_str = ", ".join(top_wasting) if top_wasting else "None detected"
+
+    fallback_report = f"""### Executive Sustainability Summary
+
+**Facility Scope:** Commercial Office Zone 3B
+
+**Key Findings:**
+Total monitored electrical consumption reached **{total_cons:.2f} kWh** against a baseline reference of **{total_base:.2f} kWh**, identifying **{total_excess:.2f} kWh** of detected excess energy waste. The primary driver of waste is `{wasting_str}`, where equipment remained energized during zero-occupancy overnight intervals. Approved intervention measures represent a projected savings of **{savings:.2f} kWh** and **{co2e:.2f} kg CO2e** emissions reduction. *Note: All stated energy and emissions savings are projected estimates based on digital twin calculations.*
+
+**Actionable Next Steps:**
+1. **Automate After-Hours Curtailment:** Implement automated setback schedules for lighting and plug loads during non-operational hours.
+2. **Review Setpoint Guidelines:** Coordinate with facility engineering to calibrate HVAC low-power ventilation setpoints for continuous air quality and optimal efficiency."""
+
+    if not gemini_key or gemini_key.strip() in ("", "your_key_here"):
+        return fallback_report
+
+    try:
+        from google import genai
+
+        client = genai.Client(api_key=gemini_key.strip())
+
+        prompt = f"""You are an executive energy sustainability auditor.
+Review the following commercial office telemetry summary:
+{json.dumps(summary_data, indent=2)}
+
+Write a concise executive summary report adhering strictly to these rules:
+1. MUST be under 200 words total.
+2. Explicitly state that all savings are projected estimates.
+3. Highlight key findings (consumption vs baseline, excess waste, top wasting assets).
+4. Highlight exactly 2 actionable next steps for facility management.
+5. Use clean Markdown formatting with clear headings.
+"""
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        report_text = response.text.strip()
+        return report_text if report_text else fallback_report
+    except Exception:
+        return fallback_report

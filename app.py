@@ -3,7 +3,7 @@ import streamlit as st
 
 from core.actions import generate_candidate_actions
 from core.energy import calculate_baselines, calculate_carbon, load_and_clean_data
-from core.recommender import get_ai_recommendation
+from core.recommender import generate_sustainability_report, get_ai_recommendation
 from core.twin import TwinStore
 
 st.set_page_config(
@@ -51,6 +51,14 @@ st.markdown(
     .priority-high { background-color: rgba(239, 68, 68, 0.15); color: #dc2626; border: 1px solid rgba(239, 68, 68, 0.3); }
     .priority-medium { background-color: rgba(245, 158, 11, 0.15); color: #d97706; border: 1px solid rgba(245, 158, 11, 0.3); }
     .priority-low { background-color: rgba(16, 185, 129, 0.15); color: #059669; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .report-card {
+        background-color: rgba(128, 128, 128, 0.04);
+        border: 1px solid rgba(128, 128, 128, 0.18);
+        border-radius: 0.65rem;
+        padding: 1.5rem 1.8rem;
+        margin-top: 1rem;
+        line-height: 1.6;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -62,6 +70,9 @@ if "ai_recommendations" not in st.session_state:
 
 if "approved_actions" not in st.session_state:
     st.session_state.approved_actions = {}
+
+if "sustainability_report" not in st.session_state:
+    st.session_state.sustainability_report = None
 
 
 @st.cache_data
@@ -142,7 +153,7 @@ with col5:
 st.write("")
 
 # Main View (Structured Tabs)
-tabs = st.tabs(["📊 Asset Overview", "🤖 AI Recommendations"])
+tabs = st.tabs(["📊 Asset Overview", "🤖 AI Recommendations", "📄 Sustainability Report"])
 
 # TAB 1: Asset Overview
 with tabs[0]:
@@ -293,3 +304,57 @@ with tabs[1]:
                                 }
                                 st.success("✅ Recommendation marked as Approved!")
                                 st.rerun()
+
+
+# TAB 3: Sustainability Report
+with tabs[2]:
+    st.subheader("Executive Sustainability & Carbon Audit")
+
+    # Aggregate total baseline kWh across dataset
+    total_baseline_kwh = float(sum((baselines.get(r["asset_id"], 0.0) / 1000.0) * (5.0 / 60.0) for _, r in df.iterrows()))
+    approved_savings_kwh = float(sum(a.get("projected_saving_kwh", 0.0) for a in st.session_state.approved_actions.values()))
+    approved_co2e_kg = float(sum(a.get("projected_co2e_kg", 0.0) for a in st.session_state.approved_actions.values()))
+    top_wasting_assets = [s.asset_id for s in twin_states.values() if s.waste_alert]
+
+    # Metrics summary preview
+    s_col1, s_col2, s_col3 = st.columns(3)
+    with s_col1:
+        st.metric("Total Consumption", f"{total_consumption:.2f} kWh")
+    with s_col2:
+        st.metric("Total Baseline", f"{total_baseline_kwh:.2f} kWh")
+    with s_col3:
+        st.metric("Total Excess Waste", f"{total_excess:.2f} kWh")
+
+    s_col4, s_col5, s_col6 = st.columns(3)
+    with s_col4:
+        st.metric("Approved Actions", f"{len(st.session_state.approved_actions)}")
+    with s_col5:
+        st.metric("Projected Savings", f"{approved_savings_kwh:.2f} kWh")
+    with s_col6:
+        st.metric("Projected CO2e Avoidance", f"{approved_co2e_kg:.2f} kg")
+
+    st.write("")
+
+    summary_payload = {
+        "total_consumption_kwh": round(total_consumption, 2),
+        "total_baseline_kwh": round(total_baseline_kwh, 2),
+        "total_excess_kwh": round(total_excess, 2),
+        "approved_savings_kwh": round(approved_savings_kwh, 2),
+        "approved_co2e_kg": round(approved_co2e_kg, 2),
+        "top_wasting_assets": top_wasting_assets,
+        "carbon_factor": carbon_factor,
+        "approved_actions_count": len(st.session_state.approved_actions),
+    }
+
+    gen_btn_col, _ = st.columns([2, 5])
+    with gen_btn_col:
+        if st.button("Generate Sustainability Report", key="btn_gen_report", type="primary"):
+            with st.spinner("Generating executive sustainability audit..."):
+                st.session_state.sustainability_report = generate_sustainability_report(summary_payload)
+
+    # Render report callout container
+    if st.session_state.sustainability_report:
+        st.markdown(
+            f'<div class="report-card">{st.session_state.sustainability_report}</div>',
+            unsafe_allow_html=True,
+        )
