@@ -1,7 +1,9 @@
 import pandas as pd
 import streamlit as st
 
+from core.actions import generate_candidate_actions
 from core.energy import calculate_baselines, calculate_carbon, load_and_clean_data
+from core.recommender import get_ai_recommendation
 from core.twin import TwinStore
 
 st.set_page_config(
@@ -10,7 +12,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# Clean minimal CSS block targeting .block-container and metrics
+# Clean minimal CSS block targeting .block-container, cards, and metrics
 st.markdown(
     """
     <style>
@@ -37,10 +39,29 @@ st.markdown(
         font-size: 1.55rem;
         font-weight: 600;
     }
+    .priority-badge {
+        display: inline-block;
+        padding: 0.2rem 0.6rem;
+        border-radius: 0.375rem;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+    }
+    .priority-high { background-color: rgba(239, 68, 68, 0.15); color: #dc2626; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .priority-medium { background-color: rgba(245, 158, 11, 0.15); color: #d97706; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .priority-low { background-color: rgba(16, 185, 129, 0.15); color: #059669; border: 1px solid rgba(16, 185, 129, 0.3); }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+# Initialize Session State
+if "ai_recommendations" not in st.session_state:
+    st.session_state.ai_recommendations = {}
+
+if "approved_actions" not in st.session_state:
+    st.session_state.approved_actions = {}
 
 
 @st.cache_data
@@ -121,8 +142,9 @@ with col5:
 st.write("")
 
 # Main View (Structured Tabs)
-tabs = st.tabs(["📊 Asset Overview"])
+tabs = st.tabs(["📊 Asset Overview", "🤖 AI Recommendations"])
 
+# TAB 1: Asset Overview
 with tabs[0]:
     st.subheader("Asset Digital Twin Status")
 
@@ -167,3 +189,107 @@ with tabs[0]:
         chart_df.columns = [f"{asset_filter} Power (W)"]
 
     st.line_chart(chart_df, height=360)
+
+
+# TAB 2: AI Recommendations
+with tabs[1]:
+    st.subheader("AI Safety & Optimization Recommendations")
+
+    # Filter assets triggering waste alert
+    alert_assets = [s for s in display_states.values() if s.waste_alert]
+
+    if not alert_assets:
+        st.info("No active waste alerts detected for the current selection. All assets are operating within expected efficiency thresholds.")
+    else:
+        for asset in alert_assets:
+            with st.expander(f"⚠️ Waste Alert: {asset.asset_id}", expanded=True):
+                # Asset metadata row
+                m_col1, m_col2, m_col3 = st.columns(3)
+                with m_col1:
+                    st.metric("Asset ID", asset.asset_id)
+                with m_col2:
+                    st.metric("Power vs Baseline", f"{asset.current_power_w:.1f} W", delta=f"{asset.current_power_w - asset.baseline_power_w:+.1f} W vs Baseline")
+                with m_col3:
+                    st.metric("Current Occupancy", f"{asset.occupancy_count} occupants")
+
+                st.write("")
+
+                # Action button to generate AI recommendation
+                btn_col, _ = st.columns([2, 5])
+                with btn_col:
+                    get_rec_clicked = st.button(
+                        "Get AI Recommendation",
+                        key=f"btn_get_rec_{asset.asset_id}",
+                        type="primary",
+                    )
+
+                if get_rec_clicked:
+                    candidates = [
+                        a.model_dump()
+                        for a in generate_candidate_actions(
+                            asset_id=asset.asset_id,
+                            excess_kwh=asset.excess_kwh,
+                            carbon_factor=carbon_factor,
+                        )
+                    ]
+                    twin_dict = {
+                        "asset_id": asset.asset_id,
+                        "state": asset.state,
+                        "current_power_w": asset.current_power_w,
+                        "baseline_power_w": asset.baseline_power_w,
+                        "occupancy_count": asset.occupancy_count,
+                        "excess_kwh": asset.excess_kwh,
+                        "co2e_kg": asset.co2e_kg,
+                        "waste_alert": asset.waste_alert,
+                    }
+                    recommendation = get_ai_recommendation(
+                        twin_state=twin_dict,
+                        candidate_actions=candidates,
+                        carbon_factor=carbon_factor,
+                    )
+                    st.session_state.ai_recommendations[asset.asset_id] = recommendation
+
+                # Display Recommendation Details if available
+                if asset.asset_id in st.session_state.ai_recommendations:
+                    rec = st.session_state.ai_recommendations[asset.asset_id]
+                    st.divider()
+
+                    # Result Header & Priority Badge
+                    p_class = f"priority-{rec.priority.lower()}"
+                    r_head_col1, r_head_col2 = st.columns([4, 1])
+                    with r_head_col1:
+                        st.markdown(f"#### Recommended Action: **{rec.decision}**")
+                    with r_head_col2:
+                        st.markdown(
+                            f'<div style="text-align: right;"><span class="priority-badge {p_class}">{rec.priority} PRIORITY</span></div>',
+                            unsafe_allow_html=True,
+                        )
+
+                    # Savings Metrics
+                    sav_col1, sav_col2 = st.columns(2)
+                    with sav_col1:
+                        st.metric("Projected Energy Saving", f"{rec.projected_saving_kwh:.2f} kWh")
+                    with sav_col2:
+                        st.metric("Projected CO2e Reduction", f"{rec.projected_co2e_kg:.2f} kg")
+
+                    # Rationale & Operator Instructions
+                    st.info(f"**Rationale:** {rec.rationale}")
+                    st.markdown(f"**Operator Instruction:** {rec.operator_instruction}")
+
+                    # Approval Workflow
+                    is_approved = asset.asset_id in st.session_state.approved_actions
+                    if is_approved:
+                        st.success(f"✅ Recommendation Status: **Approved** ({st.session_state.approved_actions[asset.asset_id]['decision']})")
+                    else:
+                        appr_col, _ = st.columns([2, 5])
+                        with appr_col:
+                            if st.button("Approve Recommendation", key=f"btn_approve_{asset.asset_id}"):
+                                st.session_state.approved_actions[asset.asset_id] = {
+                                    "action_id": rec.selected_action_id,
+                                    "decision": rec.decision,
+                                    "projected_saving_kwh": rec.projected_saving_kwh,
+                                    "projected_co2e_kg": rec.projected_co2e_kg,
+                                    "status": "Approved",
+                                }
+                                st.success("✅ Recommendation marked as Approved!")
+                                st.rerun()
