@@ -210,13 +210,30 @@ def generate_sustainability_report(summary_data: Dict[str, Any]) -> str:
     top_wasting = summary_data.get("top_wasting_assets", [])
     wasting_str = ", ".join(top_wasting) if top_wasting else "None detected"
 
+    tariff = float(summary_data.get("tariff_per_kwh", 0.0) or 0.0)
+    cost_savings = float(
+        summary_data.get("projected_cost_savings_inr", savings * tariff) or 0.0
+    )
+
+    zone_breakdown = summary_data.get("zone_breakdown") or []
+    zone_line = ""
+    if zone_breakdown:
+        zone_parts = [
+            f"{zone.get('asset_id', 'unknown')} "
+            f"({float(zone.get('consumption_kwh', 0.0)):.2f} kWh)"
+            for zone in zone_breakdown
+        ]
+        zone_line = (
+            "\n**Per-Zone Consumption:** " + ", ".join(zone_parts) + ".\n"
+        )
+
     fallback_report = f"""### Executive Sustainability Summary
 
 **Facility Scope:** Commercial Office Zone 3B
 
 **Key Findings:**
-Total monitored electrical consumption reached **{total_cons:.2f} kWh** against a baseline reference of **{total_base:.2f} kWh**, identifying **{total_excess:.2f} kWh** of detected excess energy waste. The primary driver of waste is `{wasting_str}`, where equipment remained energized during zero-occupancy overnight intervals. Approved intervention measures represent a projected savings of **{savings:.2f} kWh** and **{co2e:.2f} kg CO2e** emissions reduction. *Note: All stated energy and emissions savings are projected estimates based on digital twin calculations.*
-
+Total monitored electrical consumption reached **{total_cons:.2f} kWh** against a baseline reference of **{total_base:.2f} kWh**, identifying **{total_excess:.2f} kWh** of detected excess energy waste. The primary driver of waste is `{wasting_str}`, where equipment remained energized during zero-occupancy overnight intervals. Approved intervention measures represent a projected savings of **{savings:.2f} kWh** and **{co2e:.2f} kg CO2e** emissions reduction. At the configured tariff of **₹{tariff:.2f}/kWh**, this equates to a projected cost saving of **₹{cost_savings:,.2f}**. *Note: All stated energy, emissions, and cost savings are projected estimates based on digital twin calculations.*
+{zone_line}
 **Actionable Next Steps:**
 1. **Automate After-Hours Curtailment:** Implement automated setback schedules for lighting and plug loads during non-operational hours.
 2. **Review Setpoint Guidelines:** Coordinate with facility engineering to calibrate HVAC low-power ventilation setpoints for continuous air quality and optimal efficiency."""

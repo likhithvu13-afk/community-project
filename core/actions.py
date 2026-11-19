@@ -1,6 +1,6 @@
 """Action dispatch and control recommendation execution module."""
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -27,10 +27,63 @@ FORBIDDEN_ACTIONS: Dict[str, List[str]] = {
     ],
 }
 
+# Zone-type mapping used as a fallback when an asset ID is renamed.
+ZONE_PREFIX_MAP: Dict[str, str] = {
+    "hvac": "hvac",
+    "light": "lighting",
+    "computer": "computers",
+    "printer": "printers",
+}
+
+# Primary (savings-bearing) safe action per zone type.
+PRIMARY_ACTION_SPECS: Dict[str, Dict[str, Any]] = {
+    "hvac": {
+        "action_id": "switch_to_low_mode_30m",
+        "label": "Switch HVAC to Low Mode (30 mins)",
+        "saving_factor": 0.50,
+        "risk_score": 0.20,
+    },
+    "lighting": {
+        "action_id": "schedule_shutdown",
+        "label": "Schedule Lighting Shutdown",
+        "saving_factor": 1.00,
+        "risk_score": 0.10,
+    },
+    "computers": {
+        "action_id": "enable_sleep_mode",
+        "label": "Enable Computer Cluster Sleep Mode",
+        "saving_factor": 0.80,
+        "risk_score": 0.25,
+    },
+    "printers": {
+        "action_id": "schedule_shutdown",
+        "label": "Schedule Printer Deep Sleep / Shutdown",
+        "saving_factor": 1.00,
+        "risk_score": 0.10,
+    },
+}
+
+# Exact-ID branches keep their original, more specific labels.
+LABEL_OVERRIDES: Dict[str, str] = {
+    "lighting-zone-3b": "Schedule Lighting Zone 3B Shutdown",
+}
+
+
+def zone_type_for_asset(asset_id: str) -> Optional[str]:
+    """Resolve a zone type from an asset ID prefix (``hvac*``, ``light*``, ...)."""
+    normalized = asset_id.strip().lower()
+    for prefix, zone_type in ZONE_PREFIX_MAP.items():
+        if normalized.startswith(prefix):
+            return zone_type
+    return None
+
 
 def is_action_allowed(asset_id: str, action_id: str) -> bool:
     """Check whether a requested action is allowed for an asset under safety rules."""
-    forbidden = FORBIDDEN_ACTIONS.get(asset_id, [])
+    forbidden = list(FORBIDDEN_ACTIONS.get(asset_id, []))
+    if zone_type_for_asset(asset_id) == "hvac":
+        # Apply the HVAC ventilation safety policy to renamed HVAC assets too.
+        forbidden.extend(FORBIDDEN_ACTIONS.get("hvac-unit-01", []))
     return action_id not in forbidden
 
 
@@ -42,19 +95,22 @@ def generate_candidate_actions(
     """Deterministically generate pre-approved safety actions for energy-wasting assets.
 
     Rules by asset type:
-    - HVAC ('hvac-unit-01'):
+    - HVAC ('hvac*'):
         * Allowed: "switch_to_low_mode_30m", "notify_facilities"
         * FORBIDDEN: Direct complete shutdown (minimum ventilation required).
         * Savings: 50% of excess_kwh.
-    - Lighting ('lighting-zone-3b'):
+    - Lighting ('light*'):
         * Allowed: "schedule_shutdown", "notify_facilities"
         * Savings: 100% of excess_kwh.
-    - Computers ('computer-cluster-1'):
+    - Computers ('computer*'):
         * Allowed: "enable_sleep_mode", "notify_facilities"
         * Savings: 80% of excess_kwh.
-    - Printers ('printer-zone-1'):
+    - Printers ('printer*'):
         * Allowed: "schedule_shutdown", "notify_facilities"
         * Savings: 100% of excess_kwh.
+
+    Exact asset-ID branches are matched first; any other asset ID falls back to
+    its zone type by prefix so candidate actions are never empty after a rename.
 
     Args:
         asset_id: Identifier of the asset.
@@ -64,115 +120,36 @@ def generate_candidate_actions(
     Returns:
         List of pre-approved CandidateAction objects.
     """
-    actions: List[CandidateAction] = []
+    zone_type = zone_type_for_asset(asset_id)
+    if zone_type is None:
+        return []
+
+    spec = PRIMARY_ACTION_SPECS[zone_type]
     excess = max(0.0, float(excess_kwh))
 
-    if asset_id == "hvac-unit-01":
-        # 50% savings for low-mode, direct shutdown is strictly excluded
-        saving_kwh = round(0.50 * excess, 4)
-        co2e_kg = round(saving_kwh * carbon_factor, 4)
-        actions.append(
-            CandidateAction(
-                action_id="switch_to_low_mode_30m",
-                label="Switch HVAC to Low Mode (30 mins)",
-                allowed=True,
-                projected_saving_kwh=saving_kwh,
-                projected_co2e_kg=co2e_kg,
-                risk_score=0.20,
-                requires_human_approval=True,
-            )
-        )
-        actions.append(
-            CandidateAction(
-                action_id="notify_facilities",
-                label="Notify Facilities Maintenance Team",
-                allowed=True,
-                projected_saving_kwh=0.0,
-                projected_co2e_kg=0.0,
-                risk_score=0.05,
-                requires_human_approval=True,
-            )
-        )
+    saving_kwh = round(float(spec["saving_factor"]) * excess, 4)
+    co2e_kg = round(saving_kwh * carbon_factor, 4)
+    label = LABEL_OVERRIDES.get(asset_id, str(spec["label"]))
 
-    elif asset_id == "lighting-zone-3b":
-        # 100% savings for scheduled lighting shutdown
-        saving_kwh = round(1.00 * excess, 4)
-        co2e_kg = round(saving_kwh * carbon_factor, 4)
-        actions.append(
-            CandidateAction(
-                action_id="schedule_shutdown",
-                label="Schedule Lighting Zone 3B Shutdown",
-                allowed=True,
-                projected_saving_kwh=saving_kwh,
-                projected_co2e_kg=co2e_kg,
-                risk_score=0.10,
-                requires_human_approval=True,
-            )
-        )
-        actions.append(
-            CandidateAction(
-                action_id="notify_facilities",
-                label="Notify Facilities Maintenance Team",
-                allowed=True,
-                projected_saving_kwh=0.0,
-                projected_co2e_kg=0.0,
-                risk_score=0.05,
-                requires_human_approval=True,
-            )
-        )
-
-    elif asset_id == "computer-cluster-1":
-        # 80% savings for standby / sleep mode
-        saving_kwh = round(0.80 * excess, 4)
-        co2e_kg = round(saving_kwh * carbon_factor, 4)
-        actions.append(
-            CandidateAction(
-                action_id="enable_sleep_mode",
-                label="Enable Computer Cluster Sleep Mode",
-                allowed=True,
-                projected_saving_kwh=saving_kwh,
-                projected_co2e_kg=co2e_kg,
-                risk_score=0.25,
-                requires_human_approval=True,
-            )
-        )
-        actions.append(
-            CandidateAction(
-                action_id="notify_facilities",
-                label="Notify Facilities Maintenance Team",
-                allowed=True,
-                projected_saving_kwh=0.0,
-                projected_co2e_kg=0.0,
-                risk_score=0.05,
-                requires_human_approval=True,
-            )
-        )
-
-    elif asset_id == "printer-zone-1":
-        # 100% savings for printer shutdown
-        saving_kwh = round(1.00 * excess, 4)
-        co2e_kg = round(saving_kwh * carbon_factor, 4)
-        actions.append(
-            CandidateAction(
-                action_id="schedule_shutdown",
-                label="Schedule Printer Deep Sleep / Shutdown",
-                allowed=True,
-                projected_saving_kwh=saving_kwh,
-                projected_co2e_kg=co2e_kg,
-                risk_score=0.10,
-                requires_human_approval=True,
-            )
-        )
-        actions.append(
-            CandidateAction(
-                action_id="notify_facilities",
-                label="Notify Facilities Maintenance Team",
-                allowed=True,
-                projected_saving_kwh=0.0,
-                projected_co2e_kg=0.0,
-                risk_score=0.05,
-                requires_human_approval=True,
-            )
-        )
+    actions: List[CandidateAction] = [
+        CandidateAction(
+            action_id=str(spec["action_id"]),
+            label=label,
+            allowed=True,
+            projected_saving_kwh=saving_kwh,
+            projected_co2e_kg=co2e_kg,
+            risk_score=float(spec["risk_score"]),
+            requires_human_approval=True,
+        ),
+        CandidateAction(
+            action_id="notify_facilities",
+            label="Notify Facilities Maintenance Team",
+            allowed=True,
+            projected_saving_kwh=0.0,
+            projected_co2e_kg=0.0,
+            risk_score=0.05,
+            requires_human_approval=True,
+        ),
+    ]
 
     return actions

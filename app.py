@@ -1,10 +1,26 @@
+import hashlib
+import json
+from datetime import datetime
+from typing import Dict, List
+
 import pandas as pd
 import streamlit as st
 
 from core.actions import generate_candidate_actions
 from core.energy import calculate_baselines, calculate_carbon, load_and_clean_data
+from core.input import (
+    ZONE_SPECS,
+    ZoneInput,
+    baselines_from_inputs,
+    build_snapshot_df,
+    default_zone_inputs,
+    inputs_from_rows,
+    prefill_from_sample,
+)
 from core.recommender import generate_sustainability_report, get_ai_recommendation
 from core.twin import TwinStore
+
+INTERVAL_MINUTES = 5.0
 
 st.set_page_config(
     page_title="Sustainable Energy Digital Twin",
@@ -81,12 +97,35 @@ def get_sensor_data() -> pd.DataFrame:
     return load_and_clean_data("data/sample_sensors.csv")
 
 
-# Data loading & Digital Twin evaluation
-df = get_sensor_data()
-baselines = calculate_baselines(df)
+def zone_display_rows(inputs: List[ZoneInput]) -> pd.DataFrame:
+    """Convert validated zone inputs into the editor's fixed 4-row table."""
+    return pd.DataFrame(
+        [
+            {
+                "Zone": zone.zone_name,
+                "Current Power (W)": float(zone.power_w),
+                "Baseline Power (W)": float(zone.baseline_power_w),
+                "Occupancy": int(zone.occupancy_count),
+                "Area (m²)": float(zone.area_m2),
+            }
+            for zone in inputs
+        ]
+    )
+
+
+def zone_name_for(asset_id: str) -> str:
+    """Return the display name for an asset, falling back to its asset ID."""
+    spec = ZONE_SPECS.get(asset_id)
+    return spec["display_name"] if spec else asset_id
+
 
 # Sidebar
 st.sidebar.title("⚙️ Settings")
+data_source = st.sidebar.radio(
+    "Data source",
+    options=["Sample dataset", "Manual zone input"],
+    index=0,
+)
 carbon_factor = st.sidebar.number_input(
     "Carbon Factor (kg CO2e/kWh)",
     min_value=0.00,
@@ -95,6 +134,106 @@ carbon_factor = st.sidebar.number_input(
     step=0.01,
     format="%.2f",
 )
+tariff = st.sidebar.number_input(
+    "Tariff (₹/kWh)",
+    min_value=0.0,
+    max_value=100.0,
+    value=8.0,
+    step=0.5,
+    format="%.2f",
+)
+
+# Header Section
+st.title("⚡ Sustainable Energy Digital Twin")
+st.caption("Real-time telemetry, asset simulation states, and energy efficiency analytics")
+
+# Manual zone input editor (4 fixed zones, one current snapshot)
+manual_inputs: List[ZoneInput] = []
+if data_source == "Manual zone input":
+    st.subheader("📝 Manual Zone Input")
+    st.caption(
+        "Enter one current reading per zone. Totals below reflect a 5-minute snapshot "
+        "and update immediately after every edit."
+    )
+
+    if "manual_rows" not in st.session_state:
+        st.session_state.manual_rows = zone_display_rows(default_zone_inputs())
+    if "manual_editor_version" not in st.session_state:
+        st.session_state.manual_editor_version = 0
+
+    if st.button("Prefill from sample data", key="btn_prefill_manual"):
+        st.session_state.manual_rows = zone_display_rows(
+            prefill_from_sample("data/sample_sensors.csv")
+        )
+        st.session_state.manual_editor_version += 1
+        st.rerun()
+
+    edited_rows = st.data_editor(
+        st.session_state.manual_rows,
+        key=f"manual_zone_editor_{st.session_state.manual_editor_version}",
+        num_rows="fixed",
+        hide_index=True,
+        use_container_width=True,
+        disabled=["Zone"],
+        column_config={
+            "Zone": st.column_config.TextColumn(
+                "Zone", help="Fixed asset zone (read-only)"
+            ),
+            "Current Power (W)": st.column_config.NumberColumn(
+                "Current Power (W)", min_value=0.0, step=10.0, format="%.1f"
+            ),
+            "Baseline Power (W)": st.column_config.NumberColumn(
+                "Baseline Power (W)", min_value=0.1, step=10.0, format="%.1f"
+            ),
+            "Occupancy": st.column_config.NumberColumn(
+                "Occupancy", min_value=0, step=1, format="%d"
+            ),
+            "Area (m²)": st.column_config.NumberColumn(
+                "Area (m²)", min_value=0.1, step=1.0, format="%.1f"
+            ),
+        },
+    )
+    st.session_state.manual_rows = edited_rows
+
+    manual_inputs, input_errors = inputs_from_rows(edited_rows)
+    if input_errors:
+        st.error(
+            "Invalid zone input — please correct the following: "
+            + " | ".join(input_errors)
+        )
+        st.stop()
+
+# Data loading & Digital Twin evaluation
+if data_source == "Sample dataset":
+    df = get_sensor_data()
+    baselines = calculate_baselines(df)
+else:
+    df = build_snapshot_df(manual_inputs, interval_minutes=INTERVAL_MINUTES)
+    baselines = baselines_from_inputs(manual_inputs)
+
+# State hygiene: clear stale AI output whenever the active inputs change
+if data_source == "Sample dataset":
+    input_fingerprint = "sample"
+else:
+    input_fingerprint = hashlib.sha256(
+        json.dumps(
+            [
+                [
+                    zone.asset_id,
+                    zone.power_w,
+                    zone.baseline_power_w,
+                    zone.occupancy_count,
+                    zone.area_m2,
+                ]
+                for zone in manual_inputs
+            ]
+        ).encode("utf-8")
+    ).hexdigest()
+
+if st.session_state.get("input_fingerprint") != input_fingerprint:
+    st.session_state.input_fingerprint = input_fingerprint
+    st.session_state.ai_recommendations = {}
+    st.session_state.approved_actions = {}
 
 available_assets = sorted(df["asset_id"].unique().tolist())
 asset_filter = st.sidebar.selectbox(
@@ -105,7 +244,7 @@ asset_filter = st.sidebar.selectbox(
 
 # Initialize and evaluate TwinStore
 store = TwinStore(baselines=baselines, carbon_factor=carbon_factor)
-twin_states = store.evaluate_dataframe(df)
+twin_states = store.evaluate_dataframe(df, interval_minutes=INTERVAL_MINUTES)
 
 # Determine active slice based on filter
 if asset_filter == "All Assets":
@@ -114,6 +253,21 @@ if asset_filter == "All Assets":
 else:
     active_df = df[df["asset_id"] == asset_filter]
     display_states = {asset_filter: twin_states[asset_filter]}
+
+# Per-zone area and display names (manual values win; sample uses zone defaults)
+if data_source == "Manual zone input":
+    area_by_asset: Dict[str, float] = {
+        zone.asset_id: float(zone.area_m2) for zone in manual_inputs
+    }
+    name_by_asset: Dict[str, str] = {
+        zone.asset_id: zone.zone_name for zone in manual_inputs
+    }
+else:
+    area_by_asset = {
+        asset_id: float(spec["default_area_m2"])
+        for asset_id, spec in ZONE_SPECS.items()
+    }
+    name_by_asset = {asset_id: zone_name_for(asset_id) for asset_id in available_assets}
 
 # Top Row KPI Calculations
 total_consumption = float(active_df["energy_kwh"].sum())
@@ -124,7 +278,9 @@ for _, row in active_df.iterrows():
     base = baselines.get(row["asset_id"], 0.0)
     if row["occupancy_count"] == 0 and row["power_w"] > 0.40 * base:
         excess_w = max(0.0, row["power_w"] - 0.10 * base)
-        excess_kwh_list.append((excess_w / 1000.0) * (5.0 / 60.0))
+        excess_kwh_list.append(
+            (excess_w / 1000.0) * (INTERVAL_MINUTES / 60.0)
+        )
     else:
         excess_kwh_list.append(0.0)
 
@@ -132,10 +288,8 @@ total_excess = float(sum(excess_kwh_list))
 projected_co2 = calculate_carbon(total_consumption, carbon_factor)
 active_assets_count = sum(1 for s in display_states.values() if s.state == "ACTIVE")
 waste_alerts_count = sum(1 for s in display_states.values() if s.waste_alert)
-
-# Header Section
-st.title("⚡ Sustainable Energy Digital Twin")
-st.caption("Real-time telemetry, asset simulation states, and energy efficiency analytics")
+electricity_cost = total_consumption * tariff
+excess_energy_cost = total_excess * tariff
 
 # Header / KPI Section (Top row using st.columns(5))
 col1, col2, col3, col4, col5 = st.columns(5)
@@ -150,6 +304,22 @@ with col4:
 with col5:
     st.metric("Energy Waste Alerts Count", f"{waste_alerts_count}")
 
+# Second KPI row: tariff-based cost metrics
+cost_col1, cost_col2 = st.columns(2)
+with cost_col1:
+    st.metric("Electricity Cost (₹)", f"₹{electricity_cost:,.2f}")
+with cost_col2:
+    st.metric("Excess Energy Cost (₹)", f"₹{excess_energy_cost:,.2f}")
+
+st.caption(
+    f"Tariff: ₹{tariff:.2f}/kWh · Carbon factor: {carbon_factor:.2f} kg CO2e/kWh · "
+    + (
+        "Sample dataset (5-minute interval)"
+        if data_source == "Sample dataset"
+        else "Manual snapshot (5-minute interval)"
+    )
+)
+
 st.write("")
 
 # Main View (Structured Tabs)
@@ -162,12 +332,26 @@ with tabs[0]:
     # Construct clean overview table
     table_data = []
     for state in display_states.values():
+        area_m2 = area_by_asset.get(state.asset_id)
+        w_per_m2 = (
+            round(state.current_power_w / area_m2, 2) if area_m2 else None
+        )
+        kwh_per_m2_day = (
+            round(state.current_power_w / 1000.0 * 24.0 / area_m2, 3)
+            if area_m2
+            else None
+        )
         table_data.append({
             "Asset ID": state.asset_id,
+            "Zone": name_by_asset.get(state.asset_id, state.asset_id),
             "State": state.state,
             "Power (W)": round(state.current_power_w, 2),
             "Baseline (W)": round(state.baseline_power_w, 2),
+            "Occupancy": state.occupancy_count,
             "Excess kWh": round(state.excess_kwh, 2),
+            "Excess Cost (₹)": round(state.excess_kwh * tariff, 2),
+            "W/m²": w_per_m2,
+            "kWh/m²/day (at current load)": kwh_per_m2_day,
             "CO2e (kg)": round(state.co2e_kg, 2),
             "Waste Alert Status": "⚠️ Waste Alert" if state.waste_alert else "Normal",
         })
@@ -180,26 +364,86 @@ with tabs[0]:
         hide_index=True,
         column_config={
             "Asset ID": st.column_config.TextColumn("Asset ID"),
+            "Zone": st.column_config.TextColumn("Zone"),
             "State": st.column_config.TextColumn("State"),
             "Power (W)": st.column_config.NumberColumn("Power (W)", format="%.2f"),
             "Baseline (W)": st.column_config.NumberColumn("Baseline (W)", format="%.2f"),
+            "Occupancy": st.column_config.NumberColumn("Occupancy", format="%d"),
             "Excess kWh": st.column_config.NumberColumn("Excess kWh", format="%.2f"),
+            "Excess Cost (₹)": st.column_config.NumberColumn("Excess Cost (₹)", format="%.2f"),
+            "W/m²": st.column_config.NumberColumn("W/m²", format="%.2f"),
+            "kWh/m²/day (at current load)": st.column_config.NumberColumn(
+                "kWh/m²/day (at current load)", format="%.3f"
+            ),
             "CO2e (kg)": st.column_config.NumberColumn("CO2e (kg)", format="%.2f"),
             "Waste Alert Status": st.column_config.TextColumn("Waste Alert Status"),
         },
+    )
+    st.caption(
+        "W/m² uses the current reading. The daily kWh/m² figure extrapolates the "
+        "current load over 24 hours and is an estimate only."
     )
 
     st.write("")
     st.subheader(f"Telemetry Analysis: {asset_filter}")
 
-    # Telemetry Line Chart for selected asset's power consumption over time
-    if asset_filter == "All Assets":
-        chart_df = df.pivot(index="timestamp", columns="asset_id", values="power_w")
-    else:
-        chart_df = df[df["asset_id"] == asset_filter].set_index("timestamp")[["power_w"]]
-        chart_df.columns = [f"{asset_filter} Power (W)"]
+    if data_source == "Sample dataset":
+        # Telemetry Line Chart for selected asset's power consumption over time
+        if asset_filter == "All Assets":
+            chart_df = df.pivot(index="timestamp", columns="asset_id", values="power_w")
+        else:
+            chart_df = df[df["asset_id"] == asset_filter].set_index("timestamp")[["power_w"]]
+            chart_df.columns = [f"{asset_filter} Power (W)"]
 
-    st.line_chart(chart_df, height=360)
+        st.line_chart(chart_df, height=360)
+    else:
+        # A manual snapshot has no history: compare current vs baseline per zone
+        chart_df = pd.DataFrame(
+            {
+                "Zone": [name_by_asset.get(s.asset_id, s.asset_id) for s in display_states.values()],
+                "Current Power (W)": [s.current_power_w for s in display_states.values()],
+                "Baseline Power (W)": [s.baseline_power_w for s in display_states.values()],
+            }
+        ).set_index("Zone")
+        st.bar_chart(chart_df, height=360)
+
+    # Export the active snapshot with computed state and KPI columns
+    export_rows = []
+    for state in display_states.values():
+        area_m2 = area_by_asset.get(state.asset_id)
+        export_rows.append({
+            "timestamp": state.last_updated,
+            "asset_id": state.asset_id,
+            "zone_name": name_by_asset.get(state.asset_id, state.asset_id),
+            "data_source": data_source,
+            "power_w": round(state.current_power_w, 2),
+            "baseline_power_w": round(state.baseline_power_w, 2),
+            "occupancy_count": state.occupancy_count,
+            "area_m2": area_m2,
+            "state": state.state,
+            "excess_kwh": round(state.excess_kwh, 4),
+            "excess_cost_inr": round(state.excess_kwh * tariff, 2),
+            "co2e_kg": round(state.co2e_kg, 4),
+            "w_per_m2": (
+                round(state.current_power_w / area_m2, 2) if area_m2 else None
+            ),
+            "kwh_per_m2_per_day": (
+                round(state.current_power_w / 1000.0 * 24.0 / area_m2, 3)
+                if area_m2
+                else None
+            ),
+            "waste_alert": state.waste_alert,
+            "tariff_inr_per_kwh": tariff,
+            "carbon_factor": carbon_factor,
+        })
+
+    st.download_button(
+        "⬇️ Download snapshot CSV",
+        data=pd.DataFrame(export_rows).to_csv(index=False).encode("utf-8"),
+        file_name=f"ecotwin_snapshot_{datetime.now():%Y%m%d_%H%M}.csv",
+        mime="text/csv",
+        key="btn_download_snapshot",
+    )
 
 
 # TAB 2: AI Recommendations
@@ -311,10 +555,26 @@ with tabs[2]:
     st.subheader("Executive Sustainability & Carbon Audit")
 
     # Aggregate total baseline kWh across dataset
-    total_baseline_kwh = float(sum((baselines.get(r["asset_id"], 0.0) / 1000.0) * (5.0 / 60.0) for _, r in df.iterrows()))
+    total_baseline_kwh = float(sum((baselines.get(r["asset_id"], 0.0) / 1000.0) * (INTERVAL_MINUTES / 60.0) for _, r in df.iterrows()))
     approved_savings_kwh = float(sum(a.get("projected_saving_kwh", 0.0) for a in st.session_state.approved_actions.values()))
     approved_co2e_kg = float(sum(a.get("projected_co2e_kg", 0.0) for a in st.session_state.approved_actions.values()))
+    projected_cost_savings = approved_savings_kwh * tariff
     top_wasting_assets = [s.asset_id for s in twin_states.values() if s.waste_alert]
+
+    # Per-zone breakdown for the report payload
+    consumption_by_asset = df.groupby("asset_id")["energy_kwh"].sum().to_dict()
+    zone_breakdown = [
+        {
+            "asset_id": state.asset_id,
+            "zone_name": name_by_asset.get(state.asset_id, state.asset_id),
+            "state": state.state,
+            "power_w": round(state.current_power_w, 2),
+            "consumption_kwh": round(float(consumption_by_asset.get(state.asset_id, 0.0)), 4),
+            "excess_kwh": round(state.excess_kwh, 4),
+            "waste_alert": state.waste_alert,
+        }
+        for state in twin_states.values()
+    ]
 
     # Metrics summary preview
     s_col1, s_col2, s_col3 = st.columns(3)
@@ -343,7 +603,10 @@ with tabs[2]:
         "approved_co2e_kg": round(approved_co2e_kg, 2),
         "top_wasting_assets": top_wasting_assets,
         "carbon_factor": carbon_factor,
+        "tariff_per_kwh": tariff,
+        "projected_cost_savings_inr": round(projected_cost_savings, 2),
         "approved_actions_count": len(st.session_state.approved_actions),
+        "zone_breakdown": zone_breakdown,
     }
 
     gen_btn_col, _ = st.columns([2, 5])
