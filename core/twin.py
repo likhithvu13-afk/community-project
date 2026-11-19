@@ -114,12 +114,15 @@ class TwinStore:
             ts = row["timestamp"]
             if hasattr(ts, "to_pydatetime"):
                 ts = ts.to_pydatetime()
+            row_interval = interval_minutes
+            if "interval_minutes" in row.index and pd.notna(row["interval_minutes"]):
+                row_interval = float(row["interval_minutes"])
             self.evaluate_asset(
                 asset_id=str(row["asset_id"]),
                 current_power_w=float(row["power_w"]),
                 occupancy_count=int(row["occupancy_count"]),
                 timestamp=ts,
-                interval_minutes=interval_minutes,
+                interval_minutes=row_interval,
             )
         return self.states
 

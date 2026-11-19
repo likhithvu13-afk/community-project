@@ -7,7 +7,21 @@ import pandas as pd
 import streamlit as st
 
 from core.actions import generate_candidate_actions
+from core.config import (
+    DEFAULT_CARBON_FACTOR,
+    DEFAULT_TARIFF_INR_PER_KWH,
+    ZONE_THRESHOLDS,
+)
 from core.energy import calculate_baselines, calculate_carbon, load_and_clean_data
+from core.ingest import (
+    PROCESSED_COLUMNS,
+    build_zone_recommendations,
+    classify_records,
+    overall_status,
+    read_dataset,
+    standardize_dataset,
+    summarize_zones,
+)
 from core.input import (
     ZONE_SPECS,
     ZoneInput,
@@ -97,6 +111,14 @@ def get_sensor_data() -> pd.DataFrame:
     return load_and_clean_data("data/sample_sensors.csv")
 
 
+@st.cache_data(show_spinner=False)
+def process_uploaded_dataset(filename: str, payload: bytes):
+    """Parse and standardise an uploaded dataset (cached by file content)."""
+    raw, file_format = read_dataset(filename, payload)
+    standardized, report = standardize_dataset(raw, file_format)
+    return standardized, report
+
+
 def zone_display_rows(inputs: List[ZoneInput]) -> pd.DataFrame:
     """Convert validated zone inputs into the editor's fixed 4-row table."""
     return pd.DataFrame(
@@ -123,14 +145,14 @@ def zone_name_for(asset_id: str) -> str:
 st.sidebar.title("⚙️ Settings")
 data_source = st.sidebar.radio(
     "Data source",
-    options=["Sample dataset", "Manual zone input"],
+    options=["Sample dataset", "Manual zone input", "Upload dataset"],
     index=0,
 )
 carbon_factor = st.sidebar.number_input(
     "Carbon Factor (kg CO2e/kWh)",
     min_value=0.00,
     max_value=2.00,
-    value=0.42,
+    value=DEFAULT_CARBON_FACTOR,
     step=0.01,
     format="%.2f",
 )
@@ -138,7 +160,7 @@ tariff = st.sidebar.number_input(
     "Tariff (₹/kWh)",
     min_value=0.0,
     max_value=100.0,
-    value=8.0,
+    value=DEFAULT_TARIFF_INR_PER_KWH,
     step=0.5,
     format="%.2f",
 )
@@ -146,6 +168,79 @@ tariff = st.sidebar.number_input(
 # Header Section
 st.title("⚡ Sustainable Energy Digital Twin")
 st.caption("Real-time telemetry, asset simulation states, and energy efficiency analytics")
+
+# Upload dataset: the single user input; everything else is automatic
+upload_standardized: pd.DataFrame | None = None
+upload_report = None
+upload_filename = ""
+upload_digest = ""
+if data_source == "Upload dataset":
+    st.subheader("📤 Upload Dataset")
+    st.caption(
+        "Upload one CSV, Excel or JSON file. Formats, columns and zones are "
+        "detected automatically — no manual configuration is required."
+    )
+    uploaded_file = st.file_uploader(
+        "Upload energy data",
+        type=["csv", "xlsx", "xls", "xlsm", "json"],
+        accept_multiple_files=False,
+        key="dataset_uploader",
+    )
+
+    if uploaded_file is None:
+        st.info(
+            "Waiting for a dataset. The file may contain readings for all four "
+            "zones or for a subset of them."
+        )
+        st.stop()
+
+    payload = uploaded_file.getvalue()
+    upload_filename = uploaded_file.name
+    upload_digest = hashlib.sha256(payload).hexdigest()
+
+    try:
+        with st.spinner("Detecting format, mapping columns and classifying zones..."):
+            upload_standardized, upload_report = process_uploaded_dataset(
+                upload_filename, payload
+            )
+    except Exception as exc:
+        st.error(f"Could not process the uploaded file: {exc}")
+        st.stop()
+
+    with st.expander("Processing report", expanded=False):
+        st.write(
+            f"**File:** `{upload_filename}` · **Format:** {upload_report.file_format} "
+            f"· **Rows read:** {upload_report.total_rows} "
+            f"· **Valid rows:** {upload_report.valid_rows}"
+        )
+        st.write(
+            "**Detected columns:** "
+            + (
+                ", ".join(
+                    f"{canonical} ← `{source}`"
+                    for canonical, source in upload_report.detected_columns.items()
+                )
+                or "none"
+            )
+        )
+        zone_counts_text = " · ".join(
+            f"{zone_name_for(asset_id)}: {count}"
+            for asset_id, count in upload_report.zone_counts.items()
+        )
+        st.write(f"**Zone classification:** {zone_counts_text}")
+        st.write(
+            f"**Cleaning:** {upload_report.dropped_rows} invalid rows dropped · "
+            f"{upload_report.duplicate_rows} duplicate rows removed · "
+            f"{upload_report.ambiguous_rows} ambiguous rows flagged"
+        )
+        for note in upload_report.notes:
+            st.caption(f"ℹ️ {note}")
+        if upload_report.ambiguous_rows:
+            st.warning(
+                "Some records could not be mapped safely to a fixed zone and were "
+                "excluded from analysis rather than silently assigned: "
+                + " | ".join(upload_report.ambiguous_examples)
+            )
 
 # Manual zone input editor (4 fixed zones, one current snapshot)
 manual_inputs: List[ZoneInput] = []
@@ -207,6 +302,20 @@ if data_source == "Manual zone input":
 if data_source == "Sample dataset":
     df = get_sensor_data()
     baselines = calculate_baselines(df)
+elif data_source == "Upload dataset":
+    df = upload_standardized[~upload_standardized["ambiguous"]].copy()
+    df = df.drop(columns=["ambiguous", "ambiguous_reason"], errors="ignore")
+    if df.empty:
+        st.error(
+            "None of the uploaded rows could be matched to the four fixed zones. "
+            "Check that the file has an asset/zone column using recognisable names."
+        )
+        st.stop()
+    baselines = {
+        asset_id: ZONE_THRESHOLDS[asset_id].baseline_power_w
+        for asset_id in df["asset_id"].unique()
+        if asset_id in ZONE_THRESHOLDS
+    }
 else:
     df = build_snapshot_df(manual_inputs, interval_minutes=INTERVAL_MINUTES)
     baselines = baselines_from_inputs(manual_inputs)
@@ -214,6 +323,8 @@ else:
 # State hygiene: clear stale AI output whenever the active inputs change
 if data_source == "Sample dataset":
     input_fingerprint = "sample"
+elif data_source == "Upload dataset":
+    input_fingerprint = f"upload:{upload_digest}:{carbon_factor:.4f}"
 else:
     input_fingerprint = hashlib.sha256(
         json.dumps(
@@ -234,6 +345,13 @@ if st.session_state.get("input_fingerprint") != input_fingerprint:
     st.session_state.input_fingerprint = input_fingerprint
     st.session_state.ai_recommendations = {}
     st.session_state.approved_actions = {}
+
+# Threshold-based analysis of the uploaded dataset
+upload_enriched: pd.DataFrame | None = None
+upload_zone_summary: pd.DataFrame | None = None
+if data_source == "Upload dataset":
+    upload_enriched = classify_records(upload_standardized, carbon_factor)
+    upload_zone_summary = summarize_zones(upload_enriched, tariff)
 
 available_assets = sorted(df["asset_id"].unique().tolist())
 asset_filter = st.sidebar.selectbox(
@@ -323,10 +441,191 @@ st.caption(
 st.write("")
 
 # Main View (Structured Tabs)
-tabs = st.tabs(["📊 Asset Overview", "🤖 AI Recommendations", "📄 Sustainability Report", "🔮 What-If Simulation"])
+tab_labels = [
+    "📊 Asset Overview",
+    "🤖 AI Recommendations",
+    "📄 Sustainability Report",
+    "🔮 What-If Simulation",
+]
+if data_source == "Upload dataset":
+    tab_labels.insert(0, "📤 Dataset Analysis")
+tabs = st.tabs(tab_labels)
+tab_offset = 1 if data_source == "Upload dataset" else 0
+overview_tab = tabs[tab_offset]
+ai_tab = tabs[tab_offset + 1]
+report_tab = tabs[tab_offset + 2]
+simulation_tab = tabs[tab_offset + 3]
+
+# TAB 0 (upload only): automatic dataset analysis
+if data_source == "Upload dataset":
+    with tabs[0]:
+        st.subheader(f"Automatic Zone Analysis: {upload_filename}")
+
+        total_energy_kwh = float(
+            upload_enriched.loc[
+                upload_enriched["asset_id"].isin(ZONE_SPECS), "energy_kwh"
+            ].sum()
+        )
+        total_waste_kwh = float(
+            upload_enriched.loc[
+                upload_enriched["asset_id"].isin(ZONE_SPECS), "excess_energy_kwh"
+            ].sum()
+        )
+        total_carbon_kg = float(
+            upload_enriched.loc[
+                upload_enriched["asset_id"].isin(ZONE_SPECS), "carbon_kg"
+            ].sum()
+        )
+        classified_rows = int(
+            upload_enriched["asset_id"].isin(ZONE_SPECS).sum()
+        )
+        system_status = overall_status(upload_zone_summary)
+        status_icon = {"NORMAL": "🟢", "WARNING": "🟡", "CRITICAL": "🔴"}.get(
+            system_status, "⚪"
+        )
+
+        sum_col1, sum_col2, sum_col3, sum_col4 = st.columns(4)
+        with sum_col1:
+            st.metric("Total Energy Consumed", f"{total_energy_kwh:,.2f} kWh")
+        with sum_col2:
+            st.metric("Total Estimated Waste", f"{total_waste_kwh:,.2f} kWh")
+        with sum_col3:
+            st.metric("Total Carbon Emissions", f"{total_carbon_kg:,.2f} kg CO2e")
+        with sum_col4:
+            st.metric("Overall System Status", f"{status_icon} {system_status}")
+
+        st.caption(
+            f"Tariff ₹{tariff:.2f}/kWh · Estimated energy cost "
+            f"₹{total_energy_kwh * tariff:,.2f} · Waste cost "
+            f"₹{total_waste_kwh * tariff:,.2f} · "
+            f"{classified_rows} classified readings"
+        )
+
+        st.write("")
+        st.subheader("Four-Zone Analysis")
+        st.dataframe(
+            upload_zone_summary,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Zone": st.column_config.TextColumn("Zone"),
+                "Asset ID": st.column_config.TextColumn("Asset ID"),
+                "Avg Power (W)": st.column_config.NumberColumn("Avg Power (W)", format="%.1f"),
+                "Peak Power (W)": st.column_config.NumberColumn("Peak Power (W)", format="%.1f"),
+                "Threshold (W)": st.column_config.NumberColumn("Threshold (W)", format="%.1f"),
+                "Energy (kWh)": st.column_config.NumberColumn("Energy (kWh)", format="%.3f"),
+                "Baseline Energy (kWh)": st.column_config.NumberColumn("Baseline Energy (kWh)", format="%.3f"),
+                "Excess Energy (kWh)": st.column_config.NumberColumn("Excess Energy (kWh)", format="%.3f"),
+                "Carbon (kg)": st.column_config.NumberColumn("Carbon (kg)", format="%.3f"),
+                "Cost (₹)": st.column_config.NumberColumn("Cost (₹)", format="%.2f"),
+                "Warning Readings": st.column_config.NumberColumn("Warning Readings", format="%d"),
+                "Critical Readings": st.column_config.NumberColumn("Critical Readings", format="%d"),
+                "Status": st.column_config.TextColumn("Status"),
+            },
+        )
+
+        st.write("")
+        st.subheader("Visualizations")
+        chart_left, chart_right = st.columns(2)
+        with chart_left:
+            st.caption("Energy consumed by zone (kWh)")
+            st.bar_chart(
+                upload_zone_summary.set_index("Zone")[["Energy (kWh)"]], height=280
+            )
+        with chart_right:
+            st.caption("Average power vs warning threshold (W)")
+            st.bar_chart(
+                upload_zone_summary.set_index("Zone")[
+                    ["Avg Power (W)", "Threshold (W)"]
+                ],
+                height=280,
+            )
+
+        chart_left2, chart_right2 = st.columns(2)
+        with chart_left2:
+            st.caption("Excess energy wastage by zone (kWh)")
+            st.bar_chart(
+                upload_zone_summary.set_index("Zone")[["Excess Energy (kWh)"]],
+                height=280,
+            )
+        with chart_right2:
+            st.caption("Carbon emissions by zone (kg CO2e)")
+            st.bar_chart(
+                upload_zone_summary.set_index("Zone")[["Carbon (kg)"]], height=280
+            )
+
+        st.write("")
+        with st.expander(
+            f"Processed records ({len(upload_enriched)} rows)", expanded=False
+        ):
+            st.caption(
+                "Columns: " + " · ".join(PROCESSED_COLUMNS)
+            )
+            st.dataframe(
+                upload_enriched[PROCESSED_COLUMNS],
+                use_container_width=True,
+                hide_index=True,
+                height=360,
+                column_config={
+                    "timestamp": st.column_config.DatetimeColumn(
+                        "timestamp", format="YYYY-MM-DD HH:mm"
+                    ),
+                    "power_w": st.column_config.NumberColumn("power_w", format="%.1f"),
+                    "threshold_w": st.column_config.NumberColumn("threshold_w", format="%.1f"),
+                    "excess_power_w": st.column_config.NumberColumn("excess_power_w", format="%.1f"),
+                    "energy_kwh": st.column_config.NumberColumn("energy_kwh", format="%.4f"),
+                    "carbon_kg": st.column_config.NumberColumn("carbon_kg", format="%.4f"),
+                },
+            )
+
+        st.write("")
+        st.subheader("AI Recommendations")
+        if st.session_state.get("upload_ai_fingerprint") != input_fingerprint:
+            with st.spinner("Generating threshold-based recommendations..."):
+                st.session_state.upload_ai_fingerprint = input_fingerprint
+                st.session_state.upload_ai_recommendations = build_zone_recommendations(
+                    upload_zone_summary, carbon_factor
+                )
+
+        upload_recommendations = st.session_state.get("upload_ai_recommendations", [])
+        if not upload_recommendations:
+            st.success(
+                "All four zones are within their configured thresholds. No "
+                "corrective recommendations are required."
+            )
+        else:
+            for item in upload_recommendations:
+                rec = item["recommendation"]
+                with st.expander(
+                    f"{'🔴' if item['status'] == 'CRITICAL' else '🟡'} "
+                    f"{item['zone_name']} — {item['status']}",
+                    expanded=True,
+                ):
+                    st.info(f"**Why:** {item['explanation']}")
+                    st.markdown(f"#### Recommended Action: **{rec['decision']}**")
+                    rec_col1, rec_col2, rec_col3 = st.columns(3)
+                    with rec_col1:
+                        st.metric("Priority", rec["priority"])
+                    with rec_col2:
+                        st.metric(
+                            "Projected Energy Saving",
+                            f"{rec['projected_saving_kwh']:.3f} kWh",
+                        )
+                    with rec_col3:
+                        st.metric(
+                            "Projected CO2e Reduction",
+                            f"{rec['projected_co2e_kg']:.3f} kg",
+                        )
+                    st.markdown(f"**Rationale:** {rec['rationale']}")
+                    st.markdown(f"**Operator Instruction:** {rec['operator_instruction']}")
+                    st.caption(
+                        f"Action `{rec['selected_action_id']}` · "
+                        f"confidence {rec['confidence']:.2f} · "
+                        "human approval required"
+                    )
 
 # TAB 1: Asset Overview
-with tabs[0]:
+with overview_tab:
     st.subheader("Asset Digital Twin Status")
 
     # Construct clean overview table
@@ -387,7 +686,7 @@ with tabs[0]:
     st.write("")
     st.subheader(f"Telemetry Analysis: {asset_filter}")
 
-    if data_source == "Sample dataset":
+    if data_source != "Manual zone input":
         # Telemetry Line Chart for selected asset's power consumption over time
         if asset_filter == "All Assets":
             chart_df = df.pivot(index="timestamp", columns="asset_id", values="power_w")
@@ -447,7 +746,7 @@ with tabs[0]:
 
 
 # TAB 2: AI Recommendations
-with tabs[1]:
+with ai_tab:
     st.subheader("AI Safety & Optimization Recommendations")
 
     # Filter assets triggering waste alert
@@ -551,7 +850,7 @@ with tabs[1]:
 
 
 # TAB 3: Sustainability Report
-with tabs[2]:
+with report_tab:
     st.subheader("Executive Sustainability & Carbon Audit")
 
     # Aggregate total baseline kWh across dataset
@@ -631,7 +930,7 @@ SIMULATION_ACTIONS = {
     "Schedule Shutdown": 1.00,
 }
 
-with tabs[3]:
+with simulation_tab:
     st.subheader("1-Hour Energy What-If Simulation")
     st.caption("Deterministic projection based on current power readings. No AI calls — pure physics.")
 
