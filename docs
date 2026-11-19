@@ -1,0 +1,198 @@
+# IMPLEMENTATION: SINGLE FILE INPUT → AUTOMATIC FOUR-ZONE ENERGY ANALYSIS
+
+Repository: https://github.com/likhithvu13-afk/community-project
+
+I want to implement a completely automated data processing system in my existing Sustainable Energy Digital Twin prototype.
+
+IMPORTANT: There must be ONLY ONE USER INPUT: FILE UPLOAD.
+
+The user should not have to:
+- Enter zone names.
+- Enter threshold values.
+- Map columns manually.
+- Enter energy readings.
+- Select individual zones.
+- Configure analysis parameters.
+
+Everything must be handled automatically by the backend.
+
+## 1. SINGLE FILE UPLOAD
+
+Provide one file-upload component.
+
+Accept CSV, Excel and JSON files.
+
+The uploaded file may contain energy readings for multiple zones in one dataset.
+
+## 2. AUTOMATIC DATA PROCESSING
+
+When a file is uploaded:
+
+1. Detect the file format.
+2. Extract the data.
+3. Identify column names and their meanings.
+4. Standardize the data into a predefined internal schema.
+5. Identify timestamps, power readings, asset identifiers and zone information.
+6. Clean missing and duplicate records.
+7. Automatically classify records into the existing four zones.
+
+Use intelligent column-name matching and asset identification.
+
+If zone identification is ambiguous, flag the affected records instead of silently assigning them to an incorrect zone.
+
+Do not ask the user to configure the data.
+
+## 3. FOUR FIXED BACKEND ZONES
+
+Use the existing zone definitions in the repository.
+
+- HVAC Unit 01 — hvac-unit-01
+- Lighting Zone 3B — lighting-zone-3b
+- Computer Cluster 1 — computer-cluster-1
+- Printer Zone 1 — printer-zone-1
+
+Maintain four fixed zone configurations in the backend.
+
+## 4. PREDEFINED THRESHOLD ENGINE
+
+Create a centralized backend configuration containing fixed thresholds for each zone.
+
+Each zone must have its own:
+- Normal operating power range.
+- Warning threshold.
+- Critical threshold.
+- Baseline power.
+- Energy consumption limits.
+
+Determine sensible initial thresholds using existing project configuration, sample sensor readings and zone-specific operating characteristics.
+
+Do not use the same threshold for every zone.
+
+Thresholds must be stored in backend configuration, not entered by the user.
+
+Make threshold values configurable by developers without requiring frontend changes.
+
+Use appropriate units and time intervals.
+
+## 5. AUTOMATIC ZONE-WISE CLASSIFICATION
+
+After processing, compare each reading with the predefined threshold for its corresponding zone.
+
+Classify each record:
+
+- NORMAL: Reading is within the expected operating range.
+- WARNING: Reading exceeds the warning threshold.
+- CRITICAL: Reading exceeds the critical threshold.
+
+Use the existing project's logic where possible.
+
+Avoid generating false alerts from isolated readings. Consider appropriate rolling averages or consecutive readings when sufficient timestamp data is available.
+
+## 6. AUTOMATIC TABLE GENERATION
+
+Generate a standardized processed table automatically.
+
+Expected columns:
+
+timestamp | asset_id | zone_name | power_w | threshold_w | excess_power_w | energy_kwh | carbon_kg | status
+
+The table must be generated from the uploaded dataset.
+
+Do not hardcode sample readings.
+
+## 7. AUTOMATIC ANALYSIS
+
+For all four zones calculate:
+
+- Total energy consumption.
+- Average power.
+- Peak power.
+- Baseline consumption.
+- Excess power.
+- Energy wastage.
+- Carbon emissions.
+- Number of warning readings.
+- Number of critical readings.
+- Overall zone status.
+
+Calculate energy using actual time intervals wherever possible.
+
+Do not confuse instantaneous power (W) with energy (kWh).
+
+Use the project's configured electricity tariff and carbon emission factor.
+
+## 8. AUTOMATIC RESULT GENERATION
+
+Once processing finishes, automatically display:
+
+A. Overall summary:
+- Total energy consumed.
+- Total estimated energy wasted.
+- Total carbon emissions.
+- Overall system status.
+
+B. Four-zone analysis table:
+- Zone name.
+- Average power.
+- Peak power.
+- Threshold.
+- Energy consumed.
+- Excess consumption.
+- Carbon emissions.
+- Status.
+
+C. Visualizations:
+- Zone-wise consumption comparison.
+- Actual power versus threshold.
+- Energy wastage comparison.
+- Carbon emissions by zone.
+
+D. AI recommendations:
+Generate recommendations based on actual threshold violations and energy readings.
+
+Explain which zone is inefficient, why it is inefficient and what action can reduce consumption.
+
+## 9. DYNAMIC DATA INTEGRATION
+
+The uploaded dataset must become the active data source.
+
+All results must be calculated from that dataset.
+
+Integrate the processing pipeline into the existing Digital Twin dashboard.
+
+Preserve existing sample-data functionality and other existing features.
+
+Do not build a separate application.
+
+## 10. IMPLEMENTATION REQUIREMENTS
+
+Inspect the existing code before modifying it.
+
+Reuse existing functions in:
+- core/input.py
+- core/energy.py
+- core/twin.py
+- core/recommender.py
+- core/config.py
+
+Create additional modules only if needed.
+
+Implement the complete backend and frontend integration.
+
+Test the workflow using one uploaded file containing readings from all four zones.
+
+Verify:
+- Correct data extraction.
+- Correct zone identification.
+- Correct threshold application.
+- Correct energy calculations.
+- Correct status classification.
+- Correct generated tables and charts.
+
+FINAL EXPECTATION:
+
+ONE FILE UPLOAD → AUTOMATIC PROCESSING → FOUR FIXED ZONE CLASSIFICATION → PREDEFINED THRESHOLD COMPARISON → AUTOMATIC ANALYSIS → DYNAMIC RESULTS.
+
+No additional user input or manual configuration should be necessary.
+
+Implement and test the actual working feature, not just a visual prototype.
