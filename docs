@@ -196,3 +196,409 @@ ONE FILE UPLOAD → AUTOMATIC PROCESSING → FOUR FIXED ZONE CLASSIFICATION → 
 No additional user input or manual configuration should be necessary.
 
 Implement and test the actual working feature, not just a visual prototype.
+
+
+# MASTER PROMPT: COMPLETE FUTURISTIC UI REDESIGN
+## Sustainable Energy Digital Twin
+
+### PROJECT REPOSITORY
+https://github.com/likhithvu13-afk/community-project
+
+### PRIMARY OBJECTIVE
+
+Completely redesign the existing Sustainable Energy Digital Twin application into a premium, futuristic, enterprise-level AI-powered energy monitoring platform.
+
+The new UI must resemble a sophisticated combination of:
+- Smart Campus Digital Twin
+- AI Energy Management System
+- Industrial IoT Dashboard
+- Sustainability Intelligence Platform
+
+IMPORTANT: This is a UI/UX redesign, NOT a backend redevelopment.
+
+Preserve all existing functionality, Python logic, energy calculations, threshold configurations, four-zone architecture, file upload functionality, AI recommendations and existing integrations.
+
+Do not delete working features or replace actual functionality with static mockups.
+
+---
+
+# 1. DESIGN SYSTEM
+
+Create a consistent futuristic dark design system.
+
+### Colour palette
+
+- Main background: #080D12
+- Secondary background: #101922
+- Card background: #14212A
+- Primary accent: #00D68F
+- Secondary accent: #00B8D9
+- Warning: #FFB547
+- Critical: #FF5263
+- Main text: #F2F7F5
+- Secondary text: #91A39E
+- Borders: subtle dark grey-green.
+
+### Visual characteristics
+
+- Premium dark interface.
+- Subtle glassmorphism.
+- Soft green and cyan glow effects.
+- Rounded dashboard cards.
+- Thin borders.
+- Modern typography.
+- Consistent spacing.
+- Smooth hover effects.
+- Minimal, elegant animations.
+- High-quality data visualizations.
+
+Avoid excessive neon effects, unnecessary gradients and clutter.
+
+The application should look professional, not like a gaming interface.
+
+# 2. MAIN DASHBOARD / HOME PAGE
+
+Create an impressive landing dashboard.
+
+### Top navigation
+
+Include:
+- Project logo and name: ECO TWIN AI.
+- Dashboard.
+- Digital Twin.
+- Energy Analytics.
+- AI Insights.
+- Sustainability.
+- Reports.
+
+Add a small system status indicator showing whether the application is operating normally.
+
+### Hero section
+
+Display:
+
+"INTELLIGENT ENERGY. SUSTAINABLE FUTURE."
+
+Subtitle:
+
+"Monitor, analyse and optimise campus energy consumption through AI-powered Digital Twin intelligence."
+
+Include a visually attractive overview of the energy monitoring system.
+
+### KPI cards
+
+Create four premium cards:
+
+1. Total Energy Consumption (kWh)
+2. Carbon Emissions (kg CO2e)
+3. Estimated Energy Waste (kWh)
+4. Overall Energy Efficiency (%)
+
+Each card should display:
+- Main numerical value.
+- Relevant icon.
+- Small descriptive label.
+- Comparison or trend where actual historical data is available.
+
+All values must come from the existing backend calculations.
+
+Never hardcode dashboard metrics.
+
+# 3. FOUR-ZONE DIGITAL TWIN
+
+This is one of the most important sections.
+
+Create an attractive visual representation of the four existing energy zones.
+
+Use four individual interactive zone cards.
+
+### Zone 1 – HVAC Unit 01
+
+Visual representation:
+- Air conditioning system.
+- Cooling icon.
+- Current power.
+- Energy consumption.
+- Threshold.
+- Operating status.
+
+### Zone 2 – Lighting Zone 3B
+
+Visual representation:
+- Smart lighting.
+- Lighting icon.
+- Current power.
+- Energy consumption.
+- Threshold.
+- Operating status.
+
+### Zone 3 – Computer Cluster 1
+
+Visual representation:
+- Computer laboratory.
+- Computer icon.
+- Current power.
+- Energy consumption.
+- Threshold.
+- Operating status.
+
+### Zone 4 – Printer Zone 1
+
+Visual representation:
+- Printer room.
+- Printer icon.
+- Current power.
+- Energy consumption.
+- Threshold.
+- Operating status.
+
+### Interactive functionality
+
+Each zone card must display:
+
+- Zone name.
+- Current power in watts.
+- Average power.
+- Energy consumption in kWh.
+- Configured threshold.
+- NORMAL / WARNING / CRITICAL status.
+
+Use green for normal, amber for warning and red for critical.
+
+When a user clicks a zone, show its detailed analytics.
+
+Do not create new zones or change existing zone identifiers.
+
+# 4. ENERGY ANALYTICS PAGE
+
+Create a visually impressive analytics section.
+
+Include:
+
+### Chart 1 – Zone-wise energy consumption
+Compare energy consumption across all four zones.
+
+### Chart 2 – Actual power vs threshold
+Display actual power readings against the predefined backend thresholds.
+
+### Chart 3 – Energy consumption trends
+Show readings over time using the uploaded dataset.
+
+### Chart 4 – Carbon emissions comparison
+Compare carbon emissions across all four zones.
+
+### Chart 5 – Energy wastage
+Identify which zone contributes the highest estimated energy wastage.
+
+Charts should be interactive, responsive and visually consistent with the dark theme.
+
+Use real backend data.
+
+Do not fabricate historical trends.
+
+# 5. SINGLE FILE UPLOAD PAGE
+
+Design a premium upload interface.
+
+IMPORTANT: There must be only ONE user input.
+
+The user uploads one CSV, Excel or JSON file.
+
+Create:
+- Large drag-and-drop upload area.
+- Upload icon.
+- Supported format labels.
+- Selected filename.
+- File size.
+- Processing animation or status indicator.
+- Success and error messages.
+
+After upload, automatically trigger the existing backend processing workflow.
+
+Show the processing stages:
+
+1. File received.
+2. Data extraction.
+3. Data cleaning.
+4. Zone identification.
+5. Threshold evaluation.
+6. Energy analysis.
+7. Results generated.
+
+Do not ask the user for zone mapping, column mapping or threshold values.
+
+Preserve the existing automatic data-processing logic.
+
+After processing, show the generated analysis results.
+
+# 6. AI INSIGHTS AND RECOMMENDATIONS
+
+Create a dedicated AI intelligence page.
+
+Display recommendations in attractive cards.
+
+Each card should contain:
+
+- Affected zone.
+- Detected problem.
+- Reason for the alert.
+- Recommended action.
+- Priority.
+- Estimated energy savings.
+- Estimated carbon reduction.
+
+Use priority indicators:
+
+- LOW
+- MEDIUM
+- HIGH
+- CRITICAL
+
+Include a visually attractive AI analysis summary.
+
+Preserve existing recommendation generation and approval functionality.
+
+Do not generate fake AI recommendations or invented savings.
+
+# 7. SUSTAINABILITY PAGE
+
+Design a sustainability intelligence dashboard.
+
+Display:
+
+- Total energy consumption.
+- Carbon footprint.
+- Estimated energy wastage.
+- Electricity expenditure.
+- Estimated savings.
+- Zone-wise environmental impact.
+
+Add a sustainability performance visualization.
+
+Use existing backend calculations and configurable emission factors.
+
+# 8. REPORTS PAGE
+
+Create a professional report interface.
+
+Allow users to view and export the sustainability analysis using existing supported report-generation functionality.
+
+Include:
+- Overall energy summary.
+- Four-zone performance.
+- Threshold violations.
+- Carbon emissions.
+- AI recommendations.
+- Energy-saving opportunities.
+
+Keep report values consistent with the active uploaded dataset.
+
+# 9. INTERACTION AND ANIMATION
+
+Add polished interactions:
+
+- Smooth page transitions where supported.
+- Hover effects on zone cards.
+- Subtle card glow.
+- Animated KPI number transitions where appropriate.
+- Loading indicators during processing.
+- Interactive charts.
+- Expandable zone details.
+- Responsive navigation.
+
+Animations must not interfere with performance or accessibility.
+
+# 10. RESPONSIVE DESIGN
+
+The complete application must work properly on:
+
+- Desktop.
+- Laptop.
+- Tablet.
+- Mobile.
+
+Use responsive grids and flexible layouts.
+
+Avoid horizontal scrolling and overlapping components.
+
+# 11. TECHNICAL REQUIREMENTS
+
+Before changing code, inspect the entire existing repository.
+
+Understand the current Streamlit structure and identify the existing frontend, backend and analytics components.
+
+Preserve the existing Python application architecture.
+
+You may:
+- Refactor UI components.
+- Create reusable styling files.
+- Create reusable dashboard components.
+- Improve chart layouts.
+- Add CSS and supported frontend enhancements.
+- Improve navigation and page structure.
+
+You must not:
+- Remove existing Python calculations.
+- Change the four zone identifiers.
+- Replace actual backend values with sample values.
+- Break CSV, Excel or JSON processing.
+- Remove threshold logic.
+- Remove existing AI recommendation functionality.
+- Break existing sample-data functionality.
+
+If introducing additional frontend libraries, ensure they are compatible with the existing project and do not unnecessarily increase dependencies.
+
+# 12. VISUAL QUALITY REQUIREMENTS
+
+The final design should feel like a real commercial energy intelligence product.
+
+Prioritise:
+- Excellent visual hierarchy.
+- Premium dark interface.
+- Professional typography.
+- Clean charts.
+- Beautiful four-zone visualisation.
+- Consistent card design.
+- Clear status indicators.
+- Easy navigation.
+
+Avoid:
+- Default-looking Streamlit widgets wherever custom styling is practical.
+- Excessive text.
+- Too many unnecessary cards.
+- Random icons.
+- Inconsistent spacing.
+- Generic templates.
+- Fake live data.
+
+# 13. FINAL TESTING
+
+After implementing the redesign:
+
+1. Run the complete application.
+2. Verify every page.
+3. Test file upload.
+4. Test automatic processing.
+5. Verify all four zone cards.
+6. Verify threshold indicators.
+7. Verify charts use actual data.
+8. Verify AI recommendations.
+9. Verify report generation.
+10. Verify existing functionality.
+11. Check desktop and mobile layouts.
+12. Resolve visual and runtime errors.
+
+### FINAL EXPECTED RESULT
+
+Transform the existing Sustainable Energy Digital Twin into a premium futuristic dark-themed AI energy management platform.
+
+The UI should be impressive enough for a national-level hackathon demonstration.
+
+Most importantly:
+
+REDESIGN EVERYTHING VISUALLY, BUT PRESERVE EVERYTHING FUNCTIONALLY.
+
+Do not stop after creating a design mockup. Implement the changes directly in the existing repository, run the application, test all features and fix any errors.
+
+At completion, provide a summary of modified files and features.
+
