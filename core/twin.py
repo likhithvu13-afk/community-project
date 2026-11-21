@@ -5,6 +5,13 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import pandas as pd
 
+from core.config import (
+    STATE_OFF_THRESHOLD,
+    STATE_ACTIVE_THRESHOLD,
+    EXCESS_BASELINE_FACTOR,
+    MIN_EXCESS_KWH_FOR_ALERT,
+)
+
 
 @dataclass
 class AssetTwinState:
@@ -21,20 +28,37 @@ class AssetTwinState:
     last_updated: datetime
 
 
-def determine_asset_state(current_power_w: float, baseline_power_w: float) -> str:
+def determine_asset_state(
+    current_power_w: float,
+    baseline_power_w: float,
+    off_threshold: float = STATE_OFF_THRESHOLD,
+    active_threshold: float = STATE_ACTIVE_THRESHOLD,
+) -> str:
     """Classify asset state based on power relative to baseline.
 
-    Rules:
-    - current_power_w < 0.10 * baseline_power_w -> "OFF"
-    - 0.10 * baseline_power_w <= current_power_w <= 0.40 * baseline_power_w -> "IDLE"
-    - current_power_w > 0.40 * baseline_power_w -> "ACTIVE"
+    Rules (all configurable via :mod:`core.config`):
+    - current_power_w < off_threshold * baseline_power_w -> "OFF"
+    - off_threshold * baseline <= current_power_w <= active_threshold * baseline -> "IDLE"
+    - current_power_w > active_threshold * baseline_power_w -> "ACTIVE"
+
+    Args:
+        current_power_w: Current measured power in Watts.
+        baseline_power_w: Baseline (typical idle) power in Watts.
+        off_threshold: Fraction of baseline below which the asset is OFF.
+        active_threshold: Fraction of baseline above which the asset is ACTIVE.
+
+    Returns:
+        One of "OFF", "IDLE", or "ACTIVE".
     """
     if baseline_power_w <= 0.0:
         return "OFF" if current_power_w <= 0.0 else "ACTIVE"
 
-    if current_power_w < 0.10 * baseline_power_w:
+    off_limit = off_threshold * baseline_power_w
+    active_limit = active_threshold * baseline_power_w
+
+    if current_power_w < off_limit:
         return "OFF"
-    elif current_power_w <= 0.40 * baseline_power_w:
+    elif current_power_w <= active_limit:
         return "IDLE"
     else:
         return "ACTIVE"
@@ -67,11 +91,22 @@ class TwinStore:
         """Evaluate and update the digital twin state for a single asset reading.
 
         Rules applied:
-        - state: OFF (<0.10*baseline), IDLE (0.10-0.40*baseline), ACTIVE (>0.40*baseline)
+        - state: OFF / IDLE / ACTIVE based on configurable thresholds
         - waste_alert: True if occupancy_count == 0 and state == "ACTIVE"
-        - excess_power_w: max(0.0, current_power_w - (0.10 * baseline_power_w)) if waste_alert
+        - excess_power_w: max(0.0, current_power_w - excess_factor * baseline)
+          only when a waste alert fires
         - excess_kwh: (excess_power_w / 1000.0) * (interval_minutes / 60.0)
         - co2e_kg: excess_kwh * carbon_factor
+
+        Args:
+            asset_id: Identifier of the asset.
+            current_power_w: Current measured power in Watts.
+            occupancy_count: Number of occupants detected.
+            timestamp: Reading timestamp. Defaults to now.
+            interval_minutes: Integration window in minutes. Defaults to 5.0.
+
+        Returns:
+            The updated AssetTwinState.
         """
         baseline = self.baselines.get(asset_id, 0.0)
         state = determine_asset_state(current_power_w, baseline)
@@ -79,8 +114,14 @@ class TwinStore:
         waste_alert = (occupancy_count == 0) and (state == "ACTIVE")
 
         if waste_alert:
-            excess_power_w = max(0.0, current_power_w - (0.10 * baseline))
+            excess_power_w = max(
+                0.0, current_power_w - (EXCESS_BASELINE_FACTOR * baseline)
+            )
             excess_kwh = (excess_power_w / 1000.0) * (interval_minutes / 60.0)
+            # Suppress immaterial excess to avoid noise.
+            if excess_kwh < MIN_EXCESS_KWH_FOR_ALERT:
+                excess_kwh = 0.0
+                waste_alert = False
             co2e_kg = excess_kwh * self.carbon_factor
         else:
             excess_kwh = 0.0

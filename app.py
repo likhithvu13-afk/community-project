@@ -10,7 +10,10 @@ from core.actions import generate_candidate_actions
 from core.config import (
     DEFAULT_CARBON_FACTOR,
     DEFAULT_TARIFF_INR_PER_KWH,
+    EXCESS_BASELINE_FACTOR,
+    STATE_ACTIVE_THRESHOLD,
     ZONE_THRESHOLDS,
+    derive_zone_thresholds_from_data,
 )
 from core.energy import calculate_baselines, calculate_carbon, load_and_clean_data
 from core.ingest import (
@@ -180,6 +183,28 @@ if data_source == "Upload dataset":
         "Upload one CSV, Excel or JSON file. Formats, columns and zones are "
         "detected automatically — no manual configuration is required."
     )
+    # Sample file download so users can test with a known-good format
+    sample_csv = (
+        "timestamp,asset_id,power_w,zone_name,occupancy_count\n"
+        "2026-10-25 08:00:00,hvac-unit-01,4500,Main Floor,0\n"
+        "2026-10-25 08:05:00,hvac-unit-01,3200,Main Floor,12\n"
+        "2026-10-25 08:10:00,lighting-zone-3b,850,Zone 3B,0\n"
+        "2026-10-25 08:15:00,lighting-zone-3b,800,Zone 3B,10\n"
+        "2026-10-25 08:20:00,computer-cluster-1,1250,IT Room,0\n"
+        "2026-10-25 08:25:00,computer-cluster-1,1180,IT Room,8\n"
+        "2026-10-25 08:30:00,printer-zone-1,300,Office,0\n"
+        "2026-10-25 08:35:00,printer-zone-1,40,Office,2\n"
+    )
+    st.download_button(
+        "⬇️ Download sample CSV (try this first)",
+        data=sample_csv.encode("utf-8"),
+        file_name="ecotwin_sample_upload.csv",
+        mime="text/csv",
+        key="btn_download_sample_csv",
+        help="Download a sample file with the expected column format, then upload it back to test.",
+    )
+    st.divider()
+
     uploaded_file = st.file_uploader(
         "Upload energy data",
         type=["csv", "xlsx", "xls", "xlsm", "json"],
@@ -311,11 +336,11 @@ elif data_source == "Upload dataset":
             "Check that the file has an asset/zone column using recognisable names."
         )
         st.stop()
-    baselines = {
-        asset_id: ZONE_THRESHOLDS[asset_id].baseline_power_w
-        for asset_id in df["asset_id"].unique()
-        if asset_id in ZONE_THRESHOLDS
-    }
+    # Derive baselines from the uploaded data (percentile-based, robust to spikes)
+    baselines = calculate_baselines(df)
+    # Derive zone thresholds from the actual data so uploads are accurate
+    derived_thresholds = derive_zone_thresholds_from_data(df, baselines)
+    ZONE_THRESHOLDS.update(derived_thresholds)
 else:
     df = build_snapshot_df(manual_inputs, interval_minutes=INTERVAL_MINUTES)
     baselines = baselines_from_inputs(manual_inputs)
@@ -350,8 +375,16 @@ if st.session_state.get("input_fingerprint") != input_fingerprint:
 upload_enriched: pd.DataFrame | None = None
 upload_zone_summary: pd.DataFrame | None = None
 if data_source == "Upload dataset":
-    upload_enriched = classify_records(upload_standardized, carbon_factor)
-    upload_zone_summary = summarize_zones(upload_enriched, tariff)
+    try:
+        upload_enriched = classify_records(upload_standardized, carbon_factor)
+        upload_zone_summary = summarize_zones(upload_enriched, tariff)
+    except Exception as exc:
+        st.error(
+            "Could not analyze the uploaded dataset: "
+            f"{exc}. Please check that the file contains readable power readings "
+            "and try again."
+        )
+        st.stop()
 
 available_assets = sorted(df["asset_id"].unique().tolist())
 asset_filter = st.sidebar.selectbox(
@@ -394,8 +427,8 @@ total_consumption = float(active_df["energy_kwh"].sum())
 excess_kwh_list = []
 for _, row in active_df.iterrows():
     base = baselines.get(row["asset_id"], 0.0)
-    if row["occupancy_count"] == 0 and row["power_w"] > 0.40 * base:
-        excess_w = max(0.0, row["power_w"] - 0.10 * base)
+    if row["occupancy_count"] == 0 and row["power_w"] > STATE_ACTIVE_THRESHOLD * base:
+        excess_w = max(0.0, row["power_w"] - (EXCESS_BASELINE_FACTOR * base))
         excess_kwh_list.append(
             (excess_w / 1000.0) * (INTERVAL_MINUTES / 60.0)
         )

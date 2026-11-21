@@ -2,6 +2,12 @@
 
 from typing import Dict, Optional
 import pandas as pd
+import numpy as np
+
+from core.config import (
+    BASELINE_PERCENTILE,
+    BASELINE_OUTLIER_MULTIPLIER,
+)
 
 
 def load_and_clean_data(file_path: str = "data/sample_sensors.csv") -> pd.DataFrame:
@@ -44,26 +50,58 @@ def calculate_baselines(
     df: pd.DataFrame,
     start_hour: int = 8,
     end_hour: int = 18,
+    percentile: float = BASELINE_PERCENTILE,
+    outlier_multiplier: Optional[float] = BASELINE_OUTLIER_MULTIPLIER,
 ) -> Dict[str, float]:
     """Calculate baseline power (W) for each asset during normal operating hours.
 
-    Filters active power readings between 08:00 and 18:00 (default operating window)
-    and computes the arithmetic mean per asset.
+    Filters active power readings between 08:00 and 18:00 (default operating
+    window) and computes a robust baseline per asset using a percentile of the
+    operating-hours distribution. The percentile (default: 50th / median) is far
+    more accurate than the arithmetic mean because it is not skewed by:
+
+    - Usage spikes (e.g. a printer drawing 520 W while printing)
+    - Outlier readings (e.g. an HVAC sensor reporting 9250 W once)
+
+    Optionally excludes readings above ``outlier_multiplier * median`` before
+    computing the percentile, which removes extreme sensor glitches entirely.
 
     Args:
         df: Cleaned sensor DataFrame containing 'timestamp', 'asset_id', and 'power_w'.
         start_hour: Start of operating window (inclusive, 0-23). Defaults to 8 (08:00).
         end_hour: End of operating window (exclusive, 0-23). Defaults to 18 (18:00).
+        percentile: Percentile (0-100) of operating-hours power to use as baseline.
+                    Defaults to 50 (median).
+        outlier_multiplier: Exclude readings above ``multiplier * median``.
+                            Set to None to disable. Defaults to 3.0.
 
     Returns:
-        Dictionary mapping asset_id to average baseline power in Watts.
+        Dictionary mapping asset_id to baseline power in Watts.
     """
     operating_mask = (df["timestamp"].dt.hour >= start_hour) & (
         df["timestamp"].dt.hour < end_hour
     )
     operating_df = df[operating_mask]
-    baseline_series = operating_df.groupby("asset_id")["power_w"].mean()
-    return baseline_series.to_dict()
+
+    baselines: Dict[str, float] = {}
+    for asset_id, group in operating_df.groupby("asset_id"):
+        powers = group["power_w"].astype(float)
+        if powers.empty:
+            baselines[asset_id] = 0.0
+            continue
+
+        # Optional outlier exclusion: drop extreme readings before baseline calc.
+        if outlier_multiplier is not None:
+            median_power = powers.median()
+            outlier_cutoff = median_power * outlier_multiplier
+            powers = powers[powers <= outlier_cutoff]
+            if powers.empty:
+                powers = group["power_w"].astype(float)
+
+        baseline_value = float(powers.quantile(percentile / 100.0))
+        baselines[asset_id] = round(baseline_value, 2)
+
+    return baselines
 
 
 def calculate_carbon(energy_kwh: float, carbon_factor: float = 0.42) -> float:
